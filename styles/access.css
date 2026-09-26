@@ -8,6 +8,34 @@
 *::-webkit-scrollbar-thumb:hover { background:var(--blue); }
 @media(forced-colors:active) { * { scrollbar-color:auto; } }
 
+/* Marco exterior fijo y desplazamiento interior, lejos de las esquinas. */
+dialog { padding:8px; overflow:hidden; }
+.dialog-scroll { max-height:calc(100dvh - 50px); overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; padding:16px; scrollbar-gutter:stable; border-radius:12px; }
+.dialog-scroll::-webkit-scrollbar-track { background:transparent; }
+.dialog-scroll>form>h2 { font-size:23px; line-height:1.3; letter-spacing:-.5px; }
+#uploadPreview .dialog-scroll>.primary { width:100%; }
+.brand { gap:9px; text-decoration:none; }
+.brand-mark { display:block; width:39px; height:39px; flex-shrink:0; overflow:visible; }
+.brand-cover { fill:var(--soft-blue); stroke:var(--blue); stroke-width:2; }
+.brand-spine { fill:none; stroke:var(--blue); stroke-width:1.8; stroke-linecap:round; opacity:.65; }
+.brand-tick { fill:none; stroke:var(--navy); stroke-width:3.5; stroke-linecap:round; stroke-linejoin:round; }
+.brand-word { font-size:28px; font-weight:750; letter-spacing:-1.6px; line-height:1; }
+.brand-period { color:var(--blue); }
+@media(max-width:700px) {
+  .dialog-scroll { max-height:calc(100dvh - 34px); padding:12px; border-radius:8px; }
+  .dialog-actions { bottom:-12px; }
+  .brand { gap:5px; }
+  .brand-mark { width:30px; height:30px; }
+  .brand-word { font-size:23px; letter-spacing:-1.2px; }
+}
+@media(max-width:370px) {
+  .brand-mark { width:26px; height:26px; }
+  .brand-word { font-size:20px; }
+}
+@media(max-height:500px) and (orientation:landscape) {
+  .dialog-scroll { max-height:calc(100dvh - 30px); }
+}
+
 .landing-mode { padding-bottom:0; }
 .landing-mode .wrap { min-height:100svh; display:flex; flex-direction:column; padding-bottom:0; }
 .landing-mode .topbar { flex-shrink:0; }
