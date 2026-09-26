@@ -57,6 +57,23 @@ try {
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
   await send('Page.navigate', { url: 'http://localhost:5173' });
   await ready(false);
+  // Diagnóstico optativo: solo memoria; nunca adjunta, persiste ni captura el archivo.
+  if (process.env.RECEIPT_DIAGNOSTIC_PATH) {
+    const data = (await readFile(process.env.RECEIPT_DIAGNOSTIC_PATH)).toString('base64');
+    const diagnostic = await evaluate(`(async () => {
+      const {optimizeImage}=await import('/src/infrastructure/image-processing.js');
+      const {validateImage}=await import('/src/infrastructure/receipts.js');
+      const bytes=Uint8Array.from(atob(${JSON.stringify(data)}),c=>c.charCodeAt(0));
+      const results=[];
+      for (const type of ['image/jpeg','image/jpg','','application/octet-stream']) {
+        const output=await optimizeImage(new File([bytes],'diagnostic.jpeg',{type}));
+        results.push({inputType:type,outputType:await validateImage(output),size:output.size});
+      }
+      return results;
+    })()`);
+    assert.ok(diagnostic.every(result=>result.size>0 && result.size<=500*1024));
+    console.log('Diagnóstico de imagen en memoria:',JSON.stringify(diagnostic));
+  }
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
   await mkdir('artifacts', { recursive: true });
   const capture = async name => writeFile(`artifacts/${name}.png`, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
@@ -187,7 +204,8 @@ try {
     const context=canvas.getContext('2d'); context.fillStyle='#fff'; context.fillRect(0,0,800,600);
     context.fillStyle='#12394e'; context.font='30px sans-serif'; context.fillText('Comprobante de prueba',40,70); context.fillText('USD 12,35',40,140);
     const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
-    const transfer=new DataTransfer(); transfer.items.add(new File([blob],'prueba.png',{type:'image/png'}));
+    // El selector del dispositivo puede entregar un MIME vacío aun siendo imagen.
+    const transfer=new DataTransfer(); transfer.items.add(new File([blob],'prueba.png',{type:''}));
     const input=document.getElementById('receiptInput'); input.files=transfer.files; input.dispatchEvent(new Event('change',{bubbles:true}));
   })()`);
   await ready();
