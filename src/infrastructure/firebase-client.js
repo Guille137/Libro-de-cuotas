@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, reload, getIdToken } from 'firebase/auth';
 import { initializeFirestore, memoryLocalCache } from 'firebase/firestore';
 import { firebaseConfig } from '../config/firebase-config.js';
 
@@ -22,6 +22,20 @@ export function createFirebaseClient() {
       return (await signInWithPopup(auth, provider)).user;
     },
     logout: () => signOut(auth),
+    loginEmail: async (email, password) => (await signInWithEmailAndPassword(auth, email, password)).user,
+    async register(email, password) {
+      const { user } = await createUserWithEmailAndPassword(auth, email, password);
+      await sendEmailVerification(user);
+      return user;
+    },
+    resetPassword: email => sendPasswordResetEmail(auth, email),
+    resendVerification: () => sendEmailVerification(auth.currentUser),
+    async refreshUser() {
+      if (!auth.currentUser) throw new Error('Volvé a iniciar sesión.');
+      await reload(auth.currentUser);
+      await getIdToken(auth.currentUser, true);
+      return auth.currentUser;
+    },
     subscribe: callback => onAuthStateChanged(auth, callback),
   };
 }

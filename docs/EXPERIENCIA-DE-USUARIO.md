@@ -27,8 +27,16 @@ Referencias utilizadas: [tamaño de objetivos de interacción de W3C](https://ww
 
 ## Verificación y límites
 
-`npm run test:browser` comprueba flujos reales en Chrome: búsqueda, paginación, pago explícito, cancelación, error de almacenamiento con borrador preservado, imagen, respaldo, revisión de calendario, borrado protegido y temas. Axe revisa doce combinaciones de pantallas/estados, incluyendo escritorio, móvil, formularios claros/oscuros y formularios a 320 px y en orientación horizontal, sin infracciones detectadas en esas comprobaciones.
+`npm run test:browser` comprueba flujos reales en Chrome: búsqueda, paginación, pago explícito, cancelación, error de almacenamiento con borrador preservado, imagen, respaldo, revisión de calendario, borrado protegido y temas. Axe revisa dieciocho combinaciones de pantallas/estados, incluyendo escritorio, móvil, formularios claros/oscuros y formularios a 320 px y en orientación horizontal, sin infracciones detectadas en esas comprobaciones.
 
 Las pruebas de dominio cubren filtros, búsqueda y guardado conjunto del detalle. Las capturas de `artifacts/` permiten inspeccionar el resultado. La revisión automática no certifica conformidad integral con WCAG ni reemplaza pruebas con lectores de pantalla, dispositivos físicos y personas usuarias. No se realizaron estudios de usabilidad con usuarios reales.
 
 La presentación compacta reduce espacios y alturas de tarjetas. En celulares, el avance ocupa una franja breve, los filtros se distribuyen en cuatro columnas y las cuotas conservan acciones de 44 px. Los campos usan 16 px para evitar zoom automático al escribir; se respetan las áreas seguras y la altura dinámica de la pantalla. El aviso de guardado no queda fijo sobre el contenido en móvil.
+
+## Portada y acceso
+
+Portada resumida sin desplazamiento en los tamaños comprobados: escritorio, 390 × 844, 320 × 568 y 740 × 360. Con zoom o texto ampliado se permite desplazarse si hace falta, para no ocultar controles. Una sesión verificada activa abre directamente el libro. El modo local sigue siendo una elección explícita.
+
+Acceso con Google o correo y contraseña, registro, recuperación y reenvío de verificación. Las cuentas de correo no abren Firestore hasta verificar el email y renovar el token. Las contraseñas solo se entregan al SDK de Firebase; se limpian al cerrar el formulario. La recuperación usa un mensaje neutral para evitar revelar si existe una cuenta. Los tests de navegador usan un proveedor simulado para estas operaciones: no crean usuarios ni envían correos reales.
+
+Barras de desplazamiento temáticas en documento, tablas, diálogos y campos de texto. Se conserva el desplazamiento nativo, los gestos y los colores del sistema en modo de contraste forzado. Algunos sistemas operativos usan barras superpuestas con apariencia propia.

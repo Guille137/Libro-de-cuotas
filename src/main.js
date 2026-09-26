@@ -7,6 +7,7 @@ import { confirmAction } from './ui/dialogs.js';
 import { createFirebaseClient } from './infrastructure/firebase-client.js';
 import { createFirestoreRepository } from './infrastructure/firestore-repository.js';
 import { optimizeImage } from './infrastructure/image-processing.js';
+import { setupAccess } from './ui/access.js';
 
 let service, localService, cloudClient, cloudUser, editorId, editorInitial, previewUrl, uploadUrl, pendingUpload;
 let busy = false, authTransition = false;
@@ -14,18 +15,42 @@ const inCloud = () => service?.repository.kind === 'cloud';
 const editorRow = () => service?.state.rows.find(row => row.id === editorId);
 const editorValues = () => ({ amount: byId('editAmount').value, paid: byId('editStatus').value === 'paid', paidDate: byId('editPaidDate').value, note: byId('editNote').value });
 const editorDirty = () => byId('editDialog').open && editorInitial !== JSON.stringify(editorValues());
+function showBook(show) {
+  byId('landing').hidden = show;
+  byId('bookScreen').hidden = !show;
+  byId('modeBadge').hidden = !show;
+  document.body.classList.toggle('landing-mode', !show);
+  byId('skipLink').href = show ? '#ledgerTitle' : '#entryTitle';
+  window.scrollTo(0, 0);
+  if (show) byId('bookTitle').setAttribute('tabindex', '-1');
+  (show ? byId('bookTitle') : byId('entryTitle')).focus({ preventScroll: true });
+}
+const access = setupAccess({
+  getClient: () => cloudClient,
+  onLocal: () => showBook(true),
+  onAuthenticated: async user => {
+    authTransition = true;
+    try {
+      const success = await run(async () => { await openCloud(user); }, 'Cuenta conectada. Tu libro local se conserva por separado.');
+      if (!success) throw new Error('No se pudo abrir el libro.');
+      showBook(true);
+    } finally { authTransition = false; }
+  },
+});
+byId('modeBadge').hidden = true;
 function errorAt(id, message = '') { byId(id).textContent = message; byId(id).hidden = !message; }
 function accountView() {
   const cloud = inCloud();
   byId('modeBadge').textContent = cloud ? 'En mi cuenta' : 'En este dispositivo';
   byId('storageSummary').textContent = cloud ? 'Guardado en tu cuenta · Copias de seguridad' : 'Solo en este navegador · Descargá una copia para conservarlo';
   byId('accountTitle').textContent = cloud ? cloudUser.email : 'Tu libro local';
-  byId('accountDescription').textContent = cloud ? 'Los cambios se guardan en tu cuenta. Actualizá para traer cambios de otro dispositivo.' : cloudClient ? 'Este libro se guarda en el navegador. Conectá Google para abrir el libro de tu cuenta.' : 'Este libro se guarda solo en este navegador. La conexión con una cuenta todavía no está disponible; podés descargar una copia de seguridad.';
+  byId('accountDescription').textContent = cloud ? 'Los cambios se guardan en tu cuenta. Actualizá para traer cambios de otro dispositivo.' : cloudClient ? 'Este libro se guarda en el navegador. Iniciá sesión para abrir el libro de tu cuenta.' : 'Este libro se guarda solo en este navegador. La conexión con una cuenta todavía no está disponible; podés descargar una copia de seguridad.';
   byId('btnLogin').hidden = cloud || !cloudClient;
   for (const id of ['btnLogout', 'btnRefresh', 'btnUploadLocal']) byId(id).hidden = !cloud;
   byId('btnReset').textContent = cloud ? 'Borrar libro de mi cuenta' : 'Borrar libro local';
 }
 async function openCloud(user) {
+  if (!user.emailVerified) throw new Error('Verificá tu correo antes de abrir el libro de tu cuenta.');
   const repository = createFirestoreRepository(cloudClient.db, user.uid, () => {
     if (cloudClient.auth.currentUser?.uid !== user.uid) throw new Error('La sesión cambió. Volvé a conectar tu cuenta.');
     if (!navigator.onLine) throw new Error('No hay conexión. Conectate a Internet y volvé a intentar; todavía no se guardó el cambio.');
@@ -195,25 +220,29 @@ byId('btnReset').addEventListener('click', async () => {
 });
 byId('btnLogin').addEventListener('click', () => {
   if (!cloudClient) return;
-  void run(async () => { authTransition = true; try { await openCloud(await cloudClient.login()); } finally { authTransition = false; } }, 'Cuenta conectada. El libro local sigue separado; podés copiarlo desde Cuenta y copias de seguridad.');
+  access.open(cloudClient.auth.currentUser && !cloudClient.auth.currentUser.emailVerified ? 'verify' : 'login');
 });
 byId('btnRefresh').addEventListener('click', () => { void run(async () => { const saved = await service.repository.load(); if (!saved) throw new Error('No se encontró el libro.'); service.state = saved; }, 'Libro actualizado desde tu cuenta.'); });
 byId('btnUploadLocal').addEventListener('click', async () => {
   if (await confirmAction({ title: '¿Copiar el libro local a tu cuenta?', description: 'Reemplazará las cuotas y comprobantes que ya tenés en tu cuenta. El libro local se conserva. Descargá una copia de la cuenta si querés guardar su contenido actual.', label: 'Copiar y reemplazar', danger: true })) await run(async () => service.importBackup(JSON.parse(await localService.exportBackup())), 'Libro local copiado a tu cuenta.');
 });
-byId('btnLogout').addEventListener('click', () => { void run(async () => { authTransition = true; try { await cloudClient.logout(); service.repository.clear(); service = localService; cloudUser = null; ledgerState.page = 1; } finally { authTransition = false; } }, 'Sesión cerrada. Estás viendo el libro de este dispositivo.'); });
+byId('btnLogout').addEventListener('click', () => { void run(async () => { authTransition = true; try { await cloudClient.logout(); service.repository.clear(); service = localService; cloudUser = null; ledgerState.page = 1; showBook(false); } finally { authTransition = false; } }, 'Sesión cerrada.'); });
 window.addEventListener('beforeunload', event => { if (busy || editorDirty() || (byId('renameDialog').open && byId('bookTitleInput').value !== service?.state.title)) { event.preventDefault(); event.returnValue = ''; } });
 async function start() {
   try {
     service = new BookService(await openRepository()); await service.initialize(localStorage.getItem('libro-cuotas-v1')); localService = service;
     cloudClient = createFirebaseClient();
     if (cloudClient) {
-      try { const user = await cloudClient.ready(); if (user) await openCloud(user); } catch (error) { notify(`No se pudo abrir la cuenta: ${error.message}. Se abrió el libro local.`, true); }
+      try { const user = await cloudClient.ready(); if (user?.emailVerified) await openCloud(user); } catch (error) { notify(`No se pudo abrir la cuenta: ${error.message}. Se abrió el libro local.`, true); byId('entryStatus').textContent = 'No se pudo abrir tu cuenta. Podés reintentar el acceso o usar el libro local.'; }
       cloudClient.subscribe(user => { if (!authTransition && inCloud() && user?.uid !== cloudUser?.uid) { service.repository.clear(); location.reload(); } });
     }
     render(service.state); accountView(); byId('app').disabled = false; byId('btnRename').disabled = false;
+    byId('entryActions').disabled = false;
+    byId('entryEmail').disabled = byId('entryGoogle').disabled = !cloudClient;
+    if (!byId('status').classList.contains('error')) byId('entryStatus').textContent = 'Sin cuenta, el libro se guarda solo en este navegador.';
+    showBook(inCloud());
     if (!byId('status').classList.contains('error')) notify(inCloud() ? 'Libro abierto. Guardado en tu cuenta.' : 'Libro abierto. Guardado solo en este dispositivo.');
-  } catch (error) { notify(`No se pudo abrir el libro: ${error.message}. Los datos existentes no se reemplazaron.`, true); byId('app').disabled = true; }
+  } catch (error) { notify(`No se pudo abrir el libro: ${error.message}. Los datos existentes no se reemplazaron.`, true); byId('entryStatus').textContent = 'No se pudo preparar el libro. Revisá el almacenamiento del navegador y recargá.'; byId('app').disabled = true; }
 }
-if (!navigator.locks) notify('Abrí la app desde localhost o HTTPS en un navegador actualizado para poder editar.', true);
-else void navigator.locks.request('libro-cuotas-editor', { ifAvailable: true }, async lock => { if (!lock) { notify('El libro está abierto en otra pestaña. Cerrala y recargá esta página para editar.', true); return; } await start(); await new Promise(() => {}); }).catch(error => notify(error.message, true));
+if (!navigator.locks) { const message = 'Abrí la app desde localhost o HTTPS en un navegador actualizado para poder editar.'; notify(message, true); byId('entryStatus').textContent = message; }
+else void navigator.locks.request('libro-cuotas-editor', { ifAvailable: true }, async lock => { if (!lock) { const message = 'El libro está abierto en otra pestaña. Cerrala y recargá esta página para editar.'; notify(message, true); byId('entryStatus').textContent = message; return; } await start(); await new Promise(() => {}); }).catch(error => { notify(error.message, true); byId('entryStatus').textContent = 'No se pudo iniciar. Recargá la página.'; });

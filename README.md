@@ -2,6 +2,10 @@
 
 Miniapp de cuotas con diseño azul y neutro, 58 cuotas mensuales por defecto, calendario configurable, monedas USD/ARS/EUR, notas y comprobantes. Funciona localmente y puede guardar el libro y las imágenes en **Firestore con el plan Spark**, sin Cloud Storage ni Cloud Functions.
 
+## Acceso
+
+La portada ofrece Google, correo y contraseña, o modo local. El registro por correo requiere verificar el email antes de abrir el libro en la nube. Incluye recuperación de contraseña y reenvío de verificación. En Firebase Authentication deben estar habilitados los proveedores Google y Correo/contraseña; el proveedor de correo fue comprobado como habilitado en el proyecto actual.
+
 ## Uso cotidiano
 
 - La tarjeta principal muestra la primera cuota pendiente y prioriza las vencidas. **Registrar pago** abre un formulario; revisar monto/fecha y pulsar **Guardar pago**. No realiza transferencias ni admite pagos parciales.

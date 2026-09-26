@@ -43,9 +43,12 @@ try {
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
     return result.result.value;
   }
-  async function ready() {
+  async function ready(enter = true) {
     for (let i = 0; i < 100; i++) {
-      if (await evaluate('document.getElementById("app") && !document.getElementById("app").disabled')) return;
+      if (await evaluate('document.getElementById("app") && !document.getElementById("app").disabled')) {
+        if (enter) await evaluate('if (!document.getElementById("landing").hidden) document.getElementById("entryLocal").click()');
+        return;
+      }
       await sleep(50);
     }
     throw new Error(await evaluate('document.body.innerText'));
@@ -53,7 +56,7 @@ try {
   await send('Runtime.enable');
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
   await send('Page.navigate', { url: 'http://localhost:5173' });
-  await ready();
+  await ready(false);
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1050, deviceScaleFactor: 1, mobile: false });
   await mkdir('artifacts', { recursive: true });
   const capture = async name => writeFile(`artifacts/${name}.png`, Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
@@ -63,6 +66,56 @@ try {
     const violations = await evaluate(`axe.run(document, {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa','wcag22aa']}}).then(r => r.violations.map(v => ({id:v.id,impact:v.impact,nodes:v.nodes.map(n=>n.html)})))`);
     assert.deepEqual(violations, [], `Accesibilidad: ${name}`);
   }
+  await audit('portada clara'); await capture('landing');
+  for (const [width,height] of [[390,844],[320,568],[740,360]]) {
+    await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:true});
+    assert.ok(await evaluate('document.documentElement.scrollHeight<=window.innerHeight && document.documentElement.scrollWidth<=window.innerWidth'),`Portada sin scroll ${width}x${height}`);
+  }
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+  await evaluate('document.getElementById("themeSelect").value="dark"; document.getElementById("themeSelect").dispatchEvent(new Event("change"))');
+  await audit('portada móvil oscura'); await capture('landing-mobile');
+  await evaluate('document.getElementById("entryEmail").click()');
+  await audit('acceso por correo');
+  await evaluate('document.getElementById("accessSwitch").click()');
+  assert.equal(await evaluate('document.getElementById("accessPassword").autocomplete'),'new-password');
+  await audit('crear cuenta');
+  await evaluate('document.getElementById("accessSwitch").click(); document.getElementById("accessReset").click()');
+  assert.equal(await evaluate('document.getElementById("passwordField").hidden'),true);
+  await audit('recuperar contraseña');
+  // Controlador con proveedor simulado: sin crear usuarios ni enviar correos reales.
+  await evaluate(`(async () => {
+    document.getElementById('accessDialog').close();
+    for (const id of ['accessDialog','entryActions']) { const node=document.getElementById(id); node.replaceWith(node.cloneNode(true)); }
+    const {setupAccess}=await import('/src/ui/access.js');
+    window.accessTest={opened:0,resets:0,resends:0,user:{emailVerified:false}};
+    const state=window.accessTest;
+    const client={auth:{currentUser:null},
+      async register(){this.auth.currentUser=state.user;return state.user;},
+      async loginEmail(){throw Object.assign(new Error('private detail'),{code:'auth/invalid-credential'});},
+      async refreshUser(){return state.user;}, async resendVerification(){state.resends++;},
+      async resetPassword(){state.resets++;}, async logout(){this.auth.currentUser=null;},
+      async login(){return {emailVerified:true};}};
+    setupAccess({getClient:()=>client,onAuthenticated:async()=>{state.opened++;},onLocal:()=>{}});
+  })()`);
+  await evaluate(`document.getElementById('entryEmail').click(); document.getElementById('accessEmail').value='test@example.test'; document.getElementById('accessPassword').value='invalid-password'; document.getElementById('accessSubmit').click(); new Promise(r=>setTimeout(r,30))`);
+  assert.match(await evaluate('document.getElementById("accessMessage").textContent'),/no coinciden/);
+  assert.equal(await evaluate('accessTest.opened'),0);
+  await evaluate(`document.getElementById('accessReset').click(); document.getElementById('accessSubmit').click(); new Promise(r=>setTimeout(r,30))`);
+  assert.equal(await evaluate('accessTest.resets'),1);
+  await evaluate(`document.getElementById('accessSwitch').click(); document.getElementById('accessSwitch').click(); document.getElementById('accessPassword').value='new-password-123'; document.getElementById('accessSubmit').click(); new Promise(r=>setTimeout(r,30))`);
+  assert.equal(await evaluate('document.getElementById("verificationActions").hidden'),false);
+  assert.equal(await evaluate('accessTest.opened'),0,'Sin acceso antes de verificar');
+  await audit('verificar correo');
+  await evaluate(`document.getElementById('resendVerification').click(); new Promise(r=>setTimeout(r,30))`);
+  assert.equal(await evaluate('accessTest.resends'),1);
+  await evaluate(`document.getElementById('checkVerification').click(); new Promise(r=>setTimeout(r,30))`);
+  assert.equal(await evaluate('accessTest.opened'),0);
+  await evaluate(`accessTest.user.emailVerified=true; document.getElementById('checkVerification').click(); new Promise(r=>setTimeout(r,30))`);
+  assert.equal(await evaluate('accessTest.opened'),1);
+  assert.equal(await evaluate('document.getElementById("accessPassword").value'),'');
+  await evaluate('document.getElementById("app").disabled=true'); await send('Page.reload'); await ready(false);
+  await evaluate('document.getElementById("accessClose").click(); document.getElementById("themeSelect").value="light"; document.getElementById("themeSelect").dispatchEvent(new Event("change")); document.getElementById("entryLocal").click()');
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1050,deviceScaleFactor:1,mobile:false});
   await capture('desktop');
   await audit('escritorio');
   await evaluate('document.getElementById("themeSelect").value="dark"; document.getElementById("themeSelect").dispatchEvent(new Event("change"))');
@@ -195,7 +248,7 @@ try {
   })()`);
   assert.equal(atomic.rejected,true); assert.equal(atomic.unchanged,true); assert.deepEqual(atomic.ids,atomic.expected); assert.equal(atomic.sameSize,true);
   assert.deepEqual(errors,[]);
-  console.log('OK Chrome: cuotas, respaldos, título, temas, guardado atómico y móvil de 320 px, incluidos formularios y orientación horizontal. Axe: sin infracciones detectadas en los doce estados comprobados.');
+  console.log('OK Chrome: portada sin scroll, acceso por correo con proveedor simulado, verificación, recuperación, cuotas y respaldos. Axe: sin infracciones en 18 estados; escritorio, móvil de 320 px y horizontal.');
 } finally {
   ws?.close();
   chrome.kill(); server.kill();
