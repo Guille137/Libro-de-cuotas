@@ -1,0 +1,96 @@
+import { before, after, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
+import { doc, setDoc, getDoc, getDocs, collection, updateDoc, deleteDoc, Bytes, serverTimestamp } from 'firebase/firestore';
+import { createFirestoreRepository } from '../src/infrastructure/firestore-repository.js';
+import { defaultState } from '../src/domain/plan.js';
+import { BookService } from '../src/application/book-service.js';
+
+let env;
+before(async () => {
+  if (!process.env.FIRESTORE_EMULATOR_HOST) throw new Error('Ejecutar con npm run test:rules, nunca contra producción.');
+  env = await initializeTestEnvironment({ projectId: 'demo-libro-cuotas', firestore: { rules: await readFile('firestore.rules', 'utf8') } });
+  await env.clearFirestore();
+});
+after(async () => { await env?.cleanup(); });
+const dbFor = uid => env.authenticatedContext(uid, { email: `${uid}@example.test`, email_verified: true }).firestore();
+const book = payload => ({ payload: JSON.stringify(payload), revision: 1, updatedAt: serverTimestamp() });
+const image = () => ({ data: Bytes.fromUint8Array(new Uint8Array([137,80,78,71,13,10,26,10])), size: 8, type: 'image/png', name: 'prueba.png', createdAt: serverTimestamp() });
+
+test('reglas: solo propietario verificado, campos limitados y revisiones', async () => {
+  const alice = dbFor('alice'); const bob = dbFor('bob');
+  const path = 'users/alice/books/main';
+  await assertSucceeds(setDoc(doc(alice, path), book(defaultState())));
+  await assertSucceeds(getDoc(doc(alice, path)));
+  await assertFails(getDoc(doc(bob, path)));
+  await assertFails(setDoc(doc(bob, path), book(defaultState())));
+  await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), path)));
+  await assertFails(getDoc(doc(env.authenticatedContext('alice', { email_verified: false }).firestore(), path)));
+  await assertFails(updateDoc(doc(alice, path), { admin: true, revision: 2, updatedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(alice, path), { revision: 5, updatedAt: serverTimestamp() }));
+  await assertFails(deleteDoc(doc(alice, path)));
+  await assertFails(setDoc(doc(alice, 'users/alice/books/extra'), book(defaultState())));
+  await assertFails(updateDoc(doc(alice, path), { payload: 'x'.repeat(200001), revision: 2, updatedAt: serverTimestamp() }));
+});
+test('reglas de comprobantes: privacidad, tipo, tamaño e inmutabilidad', async () => {
+  const alice = dbFor('files'); const bob = dbFor('other');
+  const path = 'users/files/receipts/valid';
+  await assertSucceeds(setDoc(doc(alice, path), image()));
+  await assertSucceeds(getDoc(doc(alice, path)));
+  await assertFails(getDoc(doc(bob, path)));
+  await assertFails(deleteDoc(doc(bob, path)));
+  await assertFails(updateDoc(doc(alice, path), { name: 'otro.png' }));
+  await assertFails(setDoc(doc(alice, 'users/files/receipts/svg'), { ...image(), type: 'image/svg+xml' }));
+  await assertFails(setDoc(doc(alice, 'users/files/receipts/size'), { ...image(), size: 100 }));
+  await assertFails(setDoc(doc(alice, 'users/files/receipts/large'), { ...image(), data: Bytes.fromUint8Array(new Uint8Array(512001)), size: 512001 }));
+  await assertSucceeds(deleteDoc(doc(alice, path)));
+});
+test('repositorio real: persistencia, archivo binario, conflictos, importación y limpieza', async () => {
+  const db = dbFor('integration');
+  const repo = createFirestoreRepository(db, 'integration');
+  const service = new BookService(repo); await service.initialize();
+  await service.rename('Mi departamento');
+  const other = new BookService(createFirestoreRepository(dbFor('integration'), 'integration')); await other.initialize();
+  const id = service.state.rows[0].id;
+  await service.updateRow(id, 'note', 'Pago de septiembre');
+  await assert.rejects(other.updateRow(id, 'note', 'Una edición desactualizada'), /Otro dispositivo/);
+  const raw = new Uint8Array([137,80,78,71,13,10,26,10]);
+  await assert.rejects(other.attach(id, new File([raw], 'conflicto.png', { type: 'image/png' })), /Otro dispositivo/);
+  assert.equal((await getDocs(collection(db, 'users/integration/receipts'))).size, 0);
+  await service.attach(id, new File([raw], 'captura.png', { type: 'image/png' }));
+  const receiptId = service.state.rows[0].receipt.id;
+  const secondRepo = createFirestoreRepository(dbFor('integration'), 'integration');
+  const loaded = await secondRepo.load();
+  assert.equal(loaded.title, 'Mi departamento');
+  assert.equal(loaded.rows[0].note, 'Pago de septiembre');
+  assert.deepEqual(new Uint8Array(await (await secondRepo.readReceipt(receiptId)).arrayBuffer()), raw);
+  const backup = { format: 'libro-cuotas', version: 2, state: structuredClone(service.state), receipts: [{ id: receiptId, data: `data:image/png;base64,${Buffer.from(raw).toString('base64')}` }] };
+  await service.importBackup(backup);
+  assert.equal(service.state.title, 'Mi departamento');
+  assert.notEqual(service.state.rows[0].receipt.id, receiptId);
+  assert.equal((await getDoc(doc(db, 'users/integration/receipts', receiptId))).exists(), false);
+  const newReceiptId = service.state.rows[0].receipt.id;
+  await service.reset();
+  assert.equal((await getDoc(doc(db, 'users/integration/receipts', newReceiptId))).exists(), false);
+  assert.equal(service.state.rows.length, 58);
+});
+test('58 comprobantes superan 10 MiB en conjunto y se guardan sin una transacción gigante', async () => {
+  const db = dbFor('full-book');
+  const repo = createFirestoreRepository(db, 'full-book');
+  const service = new BookService(repo); await service.initialize();
+  const state = structuredClone(service.state);
+  const bytes = new Uint8Array(220 * 1024);
+  bytes.set([137,80,78,71,13,10,26,10]);
+  const blob = new Blob([bytes], { type: 'image/png' });
+  const put = state.rows.map(row => {
+    const id = crypto.randomUUID();
+    row.receipt = { id, name: 'captura.png', type: blob.type, size: blob.size };
+    return { id, blob };
+  });
+  await service.commit(state, { put });
+  const second = createFirestoreRepository(dbFor('full-book'), 'full-book');
+  const loaded = await second.load();
+  assert.equal(loaded.rows.filter(row => row.receipt).length, 58);
+  assert.equal((await second.readReceipt(loaded.rows.at(-1).receipt.id)).size, blob.size);
+});

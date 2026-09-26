@@ -1,0 +1,7 @@
+{
+  "indexes": [],
+  "fieldOverrides": [
+    { "collectionGroup": "receipts", "fieldPath": "data", "indexes": [] },
+    { "collectionGroup": "books", "fieldPath": "payload", "indexes": [] }
+  ]
+}

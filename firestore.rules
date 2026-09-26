@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) {
+      return request.auth != null && request.auth.uid == uid
+        && request.auth.token.email_verified == true;
+    }
+    match /users/{uid}/books/{bookId} {
+      allow read: if owner(uid) && bookId == 'main';
+      function validBook() {
+        let d = request.resource.data;
+        return bookId == 'main'
+          && d.keys().hasAll(['payload', 'revision', 'updatedAt'])
+          && d.keys().hasOnly(['payload', 'revision', 'updatedAt'])
+          && d.payload is string && d.payload.size() > 0 && d.payload.size() <= 200000
+          && d.revision is int && d.revision > 0
+          && d.updatedAt == request.time;
+      }
+      allow create: if owner(uid) && validBook() && request.resource.data.revision == 1;
+      allow update: if owner(uid) && validBook()
+        && request.resource.data.revision == resource.data.revision + 1;
+      // El reset escribe un libro vacío con nueva revisión; no reinicia concurrencia.
+      allow delete: if false;
+    }
+    match /users/{uid}/receipts/{receiptId} {
+      allow read, delete: if owner(uid);
+      allow create: if owner(uid)
+        && receiptId.matches('^[a-zA-Z0-9-]{1,80}$')
+        && request.resource.data.keys().hasAll(['data', 'type', 'size', 'name', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['data', 'type', 'size', 'name', 'createdAt'])
+        && request.resource.data.data is bytes
+        && request.resource.data.size is int
+        && request.resource.data.size > 0 && request.resource.data.size <= 512000
+        && request.resource.data.data.size() == request.resource.data.size
+        && request.resource.data.type in ['image/jpeg', 'image/png', 'image/webp']
+        && request.resource.data.name is string && request.resource.data.name.size() <= 120
+        && request.resource.data.createdAt == request.time;
+      allow update: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
